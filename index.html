@@ -1,0 +1,364 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Time Echo: Paradox Runner</title>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Sarabun:wght@400;700&display=swap');
+        body {
+            font-family: 'Sarabun', sans-serif;
+            background-color: #0d1117;
+            color: #c9d1d9;
+            display: flex;
+            justify-content.center;
+            align-items: center;
+            min-height: 100vh;
+            margin: 0;
+            flex-direction: column;
+            padding: 20px;
+        }
+        canvas {
+            background-color: #0d1117;
+            border: 2px solid #2f343a;
+            border-radius: 12px;
+            box-shadow: 0 4px 15px rgba(0, 0, 0, 0.5);
+            max-width: 95%;
+            margin-bottom: 20px;
+        }
+        .game-container {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+        .controls {
+            display: flex;
+            gap: 15px;
+            margin-top: 20px;
+        }
+        button {
+            font-family: 'Sarabun', sans-serif;
+            font-size: 16px;
+            padding: 12px 24px;
+            border-radius: 8px;
+            border: none;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            color: #ffffff;
+        }
+        #recordButton {
+            background-color: #38a169;
+        }
+        #recordButton.active {
+            background-color: #e53e3e;
+        }
+        #resetButton {
+            background-color: #2b6cb0;
+        }
+        button:hover {
+            transform: translateY(-3px);
+            box-shadow: 0 4px 10px rgba(0, 0, 0, 0.2);
+        }
+        .message-box {
+            background-color: #161b22;
+            padding: 15px;
+            border-radius: 8px;
+            text-align: center;
+            margin-top: 20px;
+            max-width: 500px;
+            line-height: 1.5;
+            border: 1px solid #30363d;
+        }
+        .game-title {
+            font-size: 2.5rem;
+            font-weight: bold;
+            text-align: center;
+            margin-bottom: 10px;
+            color: #58a6ff;
+            text-shadow: 0 0 10px rgba(88, 166, 255, 0.5);
+        }
+    </style>
+</head>
+<body>
+    <div class="game-container">
+        <h1 class="game-title">Time Echo: Paradox Runner</h1>
+        <canvas id="gameCanvas" width="800" height="400"></canvas>
+        <div class="message-box" id="messageBox">
+            <h3>คำแนะนำ:</h3>
+            <p>ใช้ปุ่มลูกศรซ้าย-ขวาเพื่อเดินและปุ่มลูกศรขึ้นเพื่อกระโดด</p>
+            <p>กด "เริ่มบันทึก" เพื่อบันทึกการเคลื่อนไหวของคุณ</p>
+            <p>เมื่อไปถึงจุดสิ้นสุด คุณจะย้อนเวลากลับมาพร้อมกับร่างโคลน</p>
+        </div>
+        <div class="controls">
+            <button id="recordButton">เริ่มบันทึก</button>
+            <button id="resetButton">รีเซ็ตด่าน</button>
+        </div>
+    </div>
+
+    <script>
+        // Game constants
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+        const GRAVITY = 0.5;
+        const JUMP_POWER = -10;
+        const PLAYER_SPEED = 4;
+        const TILE_SIZE = 40;
+
+        // Player and game state
+        let player;
+        let platforms = [];
+        let clones = [];
+        let isRecording = false;
+        let recordingData = [];
+        let recordingFrame = 0;
+        let isLevelComplete = false;
+        let recordButton = document.getElementById('recordButton');
+        let resetButton = document.getElementById('resetButton');
+        let messageBox = document.getElementById('messageBox');
+        let nextLevelButton;
+        
+        // Puzzle elements
+        let switchButton;
+        let door;
+        let doorState = 'closed';
+
+        // Keyboard input handling
+        let keys = {};
+        window.addEventListener('keydown', (e) => {
+            keys[e.key] = true;
+        });
+        window.addEventListener('keyup', (e) => {
+            keys[e.key] = false;
+        });
+
+        // Main game objects
+        function createPlayer(x, y, color) {
+            return {
+                x: x,
+                y: y,
+                width: TILE_SIZE * 0.7,
+                height: TILE_SIZE * 0.7,
+                color: color,
+                velocityY: 0,
+                isGrounded: false,
+                record: true,
+                draw() {
+                    ctx.fillStyle = this.color;
+                    ctx.fillRect(this.x, this.y, this.width, this.height);
+                }
+            };
+        }
+
+        function createPlatform(x, y, width, height) {
+            return {
+                x: x,
+                y: y,
+                width: width,
+                height: height,
+                draw() {
+                    ctx.fillStyle = '#4f4f5a';
+                    ctx.fillRect(this.x, this.y, this.width, this.height);
+                }
+            };
+        }
+        
+        function createSwitch(x, y, width, height) {
+            return {
+                x: x,
+                y: y,
+                width: width,
+                height: height,
+                isPressed: false,
+                draw() {
+                    ctx.fillStyle = this.isPressed ? '#e53e3e' : '#a0aec0';
+                    ctx.fillRect(this.x, this.y, this.width, this.height);
+                }
+            };
+        }
+
+        function createDoor(x, y, width, height) {
+            return {
+                x: x,
+                y: y,
+                width: width,
+                height: height,
+                state: 'closed', // 'closed' or 'open'
+                draw() {
+                    if (this.state === 'closed') {
+                        ctx.fillStyle = '#6b46c1';
+                        ctx.fillRect(this.x, this.y, this.width, this.height);
+                    }
+                }
+            };
+        }
+        
+        // Level Initialization
+        function initLevel() {
+            platforms = [
+                createPlatform(0, canvas.height - TILE_SIZE, canvas.width, TILE_SIZE), // Ground
+                createPlatform(canvas.width * 0.5 - 100, canvas.height - TILE_SIZE - 80, 200, TILE_SIZE / 2),
+                createPlatform(canvas.width * 0.75, canvas.height - TILE_SIZE - 150, 200, TILE_SIZE / 2),
+            ];
+            player = createPlayer(50, canvas.height - TILE_SIZE - TILE_SIZE * 0.7, '#58a6ff');
+            
+            // Re-create puzzle elements for a new level
+            switchButton = createSwitch(canvas.width * 0.5 - 20, canvas.height - TILE_SIZE - 100, 40, 10);
+            door = createDoor(canvas.width * 0.75, canvas.height - TILE_SIZE - 250, 40, 100);
+
+            // Reset game state
+            clones = [];
+            isRecording = false;
+            recordingData = [];
+            recordingFrame = 0;
+            isLevelComplete = false;
+            recordButton.textContent = "เริ่มบันทึก";
+            recordButton.classList.remove('active');
+            door.state = 'closed';
+            showMessage("ใช้ปุ่มลูกศรเพื่อเล่น และกด 'เริ่มบันทึก' เพื่อเริ่ม!");
+        }
+
+        // Show game messages in the dedicated message box
+        function showMessage(text) {
+            messageBox.innerHTML = text;
+        }
+
+        // Collision detection function
+        function checkCollision(obj1, obj2) {
+            return obj1.x < obj2.x + obj2.width &&
+                   obj1.x + obj1.width > obj2.x &&
+                   obj1.y < obj2.y + obj2.height &&
+                   obj1.y + obj1.height > obj2.y;
+        }
+
+        // Game Loop
+        function gameLoop() {
+            // Clear canvas
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+            if (isLevelComplete) {
+                // Game over screen or next level logic
+                ctx.fillStyle = 'rgba(0, 0, 0, 0.5)';
+                ctx.fillRect(0, 0, canvas.width, canvas.height);
+                ctx.fillStyle = '#ffffff';
+                ctx.font = '40px Sarabun';
+                ctx.textAlign = 'center';
+                ctx.fillText('คุณทำสำเร็จแล้ว!', canvas.width / 2, canvas.height / 2);
+                return;
+            }
+
+            // Update player
+            player.x += keys['ArrowRight'] ? PLAYER_SPEED : keys['ArrowLeft'] ? -PLAYER_SPEED : 0;
+            if (keys['ArrowUp'] && player.isGrounded) {
+                player.velocityY = JUMP_POWER;
+                player.isGrounded = false;
+            }
+            player.velocityY += GRAVITY;
+            player.y += player.velocityY;
+
+            // Collision with platforms
+            player.isGrounded = false;
+            platforms.forEach(p => {
+                p.draw();
+                if (checkCollision(player, p)) {
+                    if (player.velocityY > 0) {
+                        player.y = p.y - player.height;
+                        player.velocityY = 0;
+                        player.isGrounded = true;
+                    }
+                }
+            });
+
+            // Update clones
+            clones.forEach(clone => {
+                if (clone.path.length > clone.frameIndex) {
+                    const frame = clone.path[clone.frameIndex];
+                    clone.x = frame.x;
+                    clone.y = frame.y;
+                    clone.frameIndex++;
+                    clone.draw();
+                }
+            });
+
+            // Record player's movement
+            if (isRecording) {
+                recordingData.push({ x: player.x, y: player.y, isGrounded: player.isGrounded });
+            }
+
+            // Check for clone interactions
+            if (clones.length > 0) {
+                clones.forEach(clone => {
+                    // Check if clone is on the switch
+                    if (checkCollision(clone, switchButton)) {
+                        switchButton.isPressed = true;
+                    } else {
+                        switchButton.isPressed = false;
+                    }
+                });
+            } else {
+                 switchButton.isPressed = false;
+            }
+
+            // Door logic
+            if (switchButton.isPressed) {
+                door.state = 'open';
+            } else {
+                door.state = 'closed';
+            }
+            
+            // Draw all elements
+            player.draw();
+            switchButton.draw();
+            door.draw();
+
+            // Check if player has reached the end point (behind the door)
+            if (player.x > door.x + door.width && player.x < door.x + door.width + 50 && door.state === 'open') {
+                 // Game complete! Reset and create a new clone
+                 if (!isLevelComplete) {
+                     showMessage("คุณผ่านด่านแล้ว! รอสักครู่เพื่อย้อนเวลาและสร้างร่างโคลน");
+                     isLevelComplete = true;
+                     setTimeout(() => {
+                         // Stop recording and create a new clone
+                         isRecording = false;
+                         clones.push({
+                            path: [...recordingData],
+                            frameIndex: 0,
+                            draw() {
+                                ctx.fillStyle = 'rgba(255, 255, 255, 0.4)';
+                                ctx.fillRect(this.path[this.frameIndex].x, this.path[this.frameIndex].y, player.width, player.height);
+                            }
+                         });
+                         initLevel();
+                     }, 2000);
+                 }
+            }
+
+
+            requestAnimationFrame(gameLoop);
+        }
+
+        // Event listeners for buttons
+        recordButton.addEventListener('click', () => {
+            if (!isRecording) {
+                isRecording = true;
+                recordingData = []; // Clear previous recording
+                recordButton.textContent = "กำลังบันทึก...";
+                recordButton.classList.add('active');
+                showMessage("เริ่มบันทึกการเคลื่อนไหวแล้ว!");
+            } else {
+                isRecording = false;
+                recordButton.textContent = "เริ่มบันทึก";
+                recordButton.classList.remove('active');
+                showMessage("บันทึกเสร็จสิ้น! ตอนนี้คุณสามารถใช้ร่างโคลนได้แล้ว");
+            }
+        });
+
+        resetButton.addEventListener('click', () => {
+            initLevel();
+        });
+
+        // Initialize and start the game
+        initLevel();
+        requestAnimationFrame(gameLoop);
+    </script>
+</body>
+</html>
